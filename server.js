@@ -16,14 +16,18 @@ mongoose.connect(process.env.MONGO_URI, {
 .then(() => console.log("MongoDB connected"))
 .catch(err => console.error("MongoDB error:", err));
 
-// Schema & Model — OVO JE ISPRAVNO
+// ⭐ NOVI MODEL — PODRŽAVA SVE ŠTO CRAWLER ŠALJE
 const Result = mongoose.model("Result", new mongoose.Schema({
   title: String,
   url: String,
-  content: String
+  content: String,
+  image: String,        // thumbnail slika
+  images: [String],     // sve slike
+  favicon: String,      // ikonica stranice
+  youtube: [String]     // youtube linkovi
 }));
 
-// Search API — OVO JE ISPRAVNO
+// ⭐ SEARCH API — PRETRAŽUJE SVE
 app.get("/api/search", async (req, res) => {
   const q = req.query.q;
   if (!q) return res.json([]);
@@ -33,7 +37,8 @@ app.get("/api/search", async (req, res) => {
       $or: [
         { title: { $regex: q, $options: "i" } },
         { content: { $regex: q, $options: "i" } },
-        { url: { $regex: q, $options: "i" } }
+        { url: { $regex: q, $options: "i" } },
+        { youtube: { $regex: q, $options: "i" } }
       ]
     }).limit(50);
 
@@ -44,12 +49,21 @@ app.get("/api/search", async (req, res) => {
   }
 });
 
-// Add crawled pages to DB
+// ⭐ ADD API — PRIMA PODATKE OD CRAWLERA
 app.post("/api/add", async (req, res) => {
   try {
-    const { title, url, content } = req.body;
+    const { title, url, content, image, images, favicon, youtube } = req.body;
 
-    const result = new Result({ title, url, content });
+    const result = new Result({
+      title,
+      url,
+      content,
+      image,
+      images,
+      favicon,
+      youtube
+    });
+
     await result.save();
 
     res.json({ message: "Saved!" });
@@ -69,3 +83,4 @@ const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log("Backend running on port " + PORT);
 });
+console.log("DEBUG MONGO_URI =", process.env.MONGO_URI);

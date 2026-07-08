@@ -3,6 +3,47 @@ const cheerio = require("cheerio");
 const puppeteer = require("puppeteer");
 const { URL } = require("url");
 
+// -------------------------
+// INTERNET AUTO-PAUSE SYSTEM
+// -------------------------
+let internetDown = false;
+
+async function waitForInternet() {
+    while (internetDown) {
+        console.log("⏸ Paused: Internet is in approximate low distance from the source or no source");
+        await new Promise(res => setTimeout(res, 5000)); // čekaj 5 sekundi
+        await checkInternetRestore();
+    }
+}
+
+function internetError(err) {
+    const msg = String(err.message || err);
+
+    if (
+        msg.includes("ENOTFOUND") ||
+        msg.includes("ERR_INTERNET_DISCONNECTED") ||
+        msg.includes("ECONNRESET") ||
+        msg.includes("ETIMEDOUT") ||
+        msg.includes("EAI_AGAIN")
+    ) {
+        internetDown = true;
+        console.log("❌ Error: Internet is in approximate low distance from the source or no source");
+        return true;
+    }
+
+    return false;
+}
+
+async function checkInternetRestore() {
+    try {
+        await axios.get("https://www.google.com", { timeout: 3000 });
+        if (internetDown) console.log("✔ Internet restored, resuming crawler...");
+        internetDown = false;
+    } catch {
+        internetDown = true;
+    }
+}
+
 const API = "https://janienginebackend-1.onrender.com/api/add";
 
 const MAX_PAGES = 10000;
@@ -25,64 +66,83 @@ function isYouTubeUrl(url) {
 async function crawlYouTube(url) {
   console.log("YT Crawling:", url);
 
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"]
-  });
+  let browser;
 
-  const page = await browser.newPage();
+  try {
+    browser = await puppeteer.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"]
+    });
 
-  await page.setUserAgent(
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-  );
+    const page = await browser.newPage();
 
-  await page.goto(url, { waitUntil: "networkidle2", timeout: 0 });
+    await page.setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+      "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    );
 
-  const data = await page.evaluate(() => {
-    const title =
-      document.querySelector("h1")?.innerText ||
-      document.querySelector("meta[name='title']")?.content ||
-      document.title ||
-      "";
+    try {
+      await page.goto(url, { waitUntil: "networkidle2", timeout: 0 });
+    } catch (err) {
+      if (internetError(err)) {
+        await waitForInternet();
+        return;
+      }
+      console.log("❌ YT Error:", err.message);
+      return;
+    }
 
-    const channel =
-      document.querySelector("ytd-channel-name")?.innerText ||
-      document.querySelector("#text-container")?.innerText ||
-      "";
+    const data = await page.evaluate(() => {
+      const title =
+        document.querySelector("h1")?.innerText ||
+        document.querySelector("meta[name='title']")?.content ||
+        document.title ||
+        "";
 
-    const description =
-      document.querySelector("#description")?.innerText ||
-      document.querySelector("meta[name='description']")?.content ||
-      "";
+      const channel =
+        document.querySelector("ytd-channel-name")?.innerText ||
+        document.querySelector("#text-container")?.innerText ||
+        "";
 
-    const thumbnail =
-      document.querySelector("link[rel='image_src']")?.href ||
-      document.querySelector("meta[property='og:image']")?.content ||
-      "";
+      const description =
+        document.querySelector("#description")?.innerText ||
+        document.querySelector("meta[name='description']")?.content ||
+        "";
 
-    const views =
-      document.querySelector("meta[itemprop='interactionCount']")?.content ||
-      "";
+      const thumbnail =
+        document.querySelector("link[rel='image_src']")?.href ||
+        document.querySelector("meta[property='og:image']")?.content ||
+        "";
 
-    return { title, channel, description, thumbnail, views };
-  });
+      const views =
+        document.querySelector("meta[itemprop='interactionCount']")?.content ||
+        "";
 
-  await browser.close();
+      return { title, channel, description, thumbnail, views };
+    });
 
-  // spremi u backend
-  await axios.post(API, {
-    title: data.title,
-    url,
-    content: data.description,
-    image: data.thumbnail,
-    images: [data.thumbnail],
-    favicon: "",
-    videos: [url],
-    youtube: data
-  });
+    await axios.post(API, {
+      title: data.title,
+      url,
+      content: data.description,
+      image: data.thumbnail,
+      images: [data.thumbnail],
+      favicon: "",
+      videos: [url],
+      youtube: data
+    });
 
-  console.log("✔ YT Saved:", url);
+    console.log("✔ YT Saved:", url);
+
+  } catch (err) {
+    if (internetError(err)) {
+        await waitForInternet();
+        return;
+    }
+    console.log("❌ YT Fatal Error:", err.message);
+  } finally {
+    if (browser) await browser.close();
+  }
 }
 
 // -------------------------
@@ -175,7 +235,6 @@ async function crawl(url) {
 
     favicon = normalizeUrl(url, favicon) || "";
 
-    // add new links to queue
     $("a").each((i, el) => {
       const href = $(el).attr("href");
       const full = normalizeUrl(url, href);
@@ -184,7 +243,6 @@ async function crawl(url) {
       if (!visited.has(full)) queue.push(full);
     });
 
-    // save normal page
     await axios.post(API, {
       title,
       url,
@@ -196,7 +254,12 @@ async function crawl(url) {
     });
 
     console.log("✔ Saved:", url);
+
   } catch (err) {
+    if (internetError(err)) {
+        await waitForInternet();
+        return;
+    }
     console.log("❌ Error:", url, err.message);
   }
 }
@@ -210,8 +273,22 @@ async function startCrawler(startUrls) {
   let count = 0;
 
   while (queue.length > 0 && count < MAX_PAGES) {
+
+    await waitForInternet();     // auto-pause
+    await checkInternetRestore(); // auto-resume
+
     const nextUrl = queue.shift();
-    await crawl(nextUrl);
+
+    try {
+      await crawl(nextUrl);
+    } catch (err) {
+      if (internetError(err)) {
+        await waitForInternet();
+        continue;
+      }
+      console.log("❌ Crawl Fatal Error:", err.message);
+    }
+
     count++;
   }
 
@@ -220,14 +297,11 @@ async function startCrawler(startUrls) {
 }
 
 const startUrls = [
-  // Svemir / Astronomija
   "https://www.nasa.gov",
   "https://www.esa.int",
   "https://www.space.com",
   "https://www.universetoday.com",
   "https://www.astronomy.com",
-
-  // Znanost / Edukacija
   "https://www.nationalgeographic.com",
   "https://www.scientificamerican.com",
   "https://www.livescience.com",
@@ -235,41 +309,26 @@ const startUrls = [
   "https://www.si.edu",
   "https://www.howstuffworks.com",
   "https://www.mentalfloss.com",
-
-  // Teen cool / Pop kultura
   "https://www.buzzfeed.com",
   "https://mashable.com",
   "https://www.theverge.com",
   "https://screenrant.com",
   "https://www.polygon.com",
-
-  // Gaming
   "https://kotaku.com",
   "https://www.gamespot.com",
   "https://www.eurogamer.net",
   "https://www.pcgamer.com",
-
-  // Glazba
   "https://www.billboard.com",
   "https://www.rollingstone.com",
   "https://pitchfork.com",
-
-  // Tech
   "https://www.techradar.com",
   "https://www.cnet.com",
   "https://www.digitaltrends.com",
-
-  // Filmovi / Serije
   "https://www.imdb.com",
   "https://www.rottentomatoes.com",
   "https://www.metacritic.com",
-
-  // Wikipedia
   "https://en.wikipedia.org",
-
-  // YouTube test
   "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 ];
-
 
 startCrawler(startUrls);

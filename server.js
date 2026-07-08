@@ -1,3 +1,4 @@
+const Result = require("./results.js");
 require("dotenv").config();
 
 const express = require("express");
@@ -15,17 +16,6 @@ mongoose.connect(process.env.MONGO_URI, {
 })
 .then(() => console.log("MongoDB connected"))
 .catch(err => console.error("MongoDB error:", err));
-
-// ⭐ NOVI MODEL — PODRŽAVA SVE ŠTO CRAWLER ŠALJE
-const Result = mongoose.model("Result", new mongoose.Schema({
-  title: String,
-  url: String,
-  content: String,
-  image: String,        // thumbnail slika
-  images: [String],     // sve slike
-  favicon: String,      // ikonica stranice
-  youtube: [String]     // youtube linkovi
-}));
 
 // ⭐ SEARCH API — PRETRAŽUJE SVE
 app.get("/api/search", async (req, res) => {
